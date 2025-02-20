@@ -29,36 +29,38 @@ from sentence_transformers.training_args import BatchSamplers
 
 # 设置 log level，记录信息
 logging.basicConfig(format="%(asctime)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S", level=logging.INFO)
-
-model_name = sys.argv[1] if len(sys.argv) > 1 else "distilroberta-base"
+# 模型名称
+model_name = sys.argv[1] if len(sys.argv) > 1 else "BAAI/bge-large-zh-v1.5"
 batch_size = 128  # 根据显存设置 batch size，越大越好
 num_train_epochs = 1  # 训练轮次
-matryoshka_dims = [768, 512, 256, 128, 64]
+matryoshka_dims = [768, 512, 256, 128, 64]  # 俄罗斯套娃维度
 
-# Save path of the model
+# 模型存储路径
 output_dir = f"output/matryoshka_nli_{model_name.replace('/', '-')}-{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}"
 
-# 1. Here we define our SentenceTransformer model. If not already a Sentence Transformer model, it will automatically
-# create one with "mean" pooling.
+# Step 1. 定义你的 SentenceTransformer 模型
 model = SentenceTransformer(model_name)
-# If we want, we can limit the maximum sequence length for the model
-# model.max_seq_length = 75
+# model.max_seq_length = 75  # 限制模型的最大序列长度
 logging.info(model)
 
-# 2. Load the AllNLI dataset: https://huggingface.co/datasets/sentence-transformers/all-nli
+# Step 2. 加载 AllNLI 数据集: https://huggingface.co/datasets/sentence-transformers/all-nli
 train_dataset = load_dataset("sentence-transformers/all-nli", "triplet", split="train")
 eval_dataset = load_dataset("sentence-transformers/all-nli", "triplet", split="dev")
 logging.info(train_dataset)
+# print(train_dataset[0])
+# {
+#     'anchor': 'A person on a horse jumps over a broken down airplane.',
+#     'negative': 'A person is at a diner, ordering an omelette.',
+#     'positive': 'A person is outdoors, on a horse.'
+# }
+# train_dataset = train_dataset.select(range(5000))  # 限制训练集长度
 
-# If you wish, you can limit the number of training samples
-# train_dataset = train_dataset.select(range(5000))
-
-# 3. Define our training loss
+# Step 3. 定义训练损失
 inner_train_loss = losses.MultipleNegativesRankingLoss(model)
 train_loss = losses.MatryoshkaLoss(model, inner_train_loss, matryoshka_dims=matryoshka_dims)
 
-# 4. Define an evaluator for use during training. This is useful to keep track of alongside the evaluation loss.
-stsb_eval_dataset = load_dataset("sentence-transformers/stsb", split="validation")
+# Step 4. 定义 evaluators，跟踪评估损失
+stsb_eval_dataset = load_dataset("sentence-transformers/stsb", split="validation")  # 评估基准数据集 STS
 evaluators = []
 for dim in matryoshka_dims:
     evaluators.append(
@@ -73,29 +75,29 @@ for dim in matryoshka_dims:
     )
 dev_evaluator = SequentialEvaluator(evaluators, main_score_function=lambda scores: scores[0])
 
-# 5. Define the training arguments
+# Step 5. 设置模型训练参数
 args = SentenceTransformerTrainingArguments(
-    # Required parameter:
+    # 必填参数:
     output_dir=output_dir,
-    # Optional training parameters:
+    # 可选参数:
     num_train_epochs=num_train_epochs,
     per_device_train_batch_size=batch_size,
     per_device_eval_batch_size=batch_size,
     warmup_ratio=0.1,
-    fp16=True,  # Set to False if you get an error that your GPU can't run on FP16
-    bf16=False,  # Set to True if you have a GPU that supports BF16
-    batch_sampler=BatchSamplers.NO_DUPLICATES,  # MultipleNegativesRankingLoss benefits from no duplicate samples in a batch
-    # Optional tracking/debugging parameters:
+    fp16=True,  # 根据 GPU 支持设置
+    bf16=False,
+    batch_sampler=BatchSamplers.NO_DUPLICATES,  # .NO_DUPLICATES 筛除重复样本
+    # debug 参数
     eval_strategy="steps",
     eval_steps=100,
     save_strategy="steps",
     save_steps=100,
     save_total_limit=2,
     logging_steps=100,
-    run_name="matryoshka-nli",  # Will be used in W&B if `wandb` is installed
+    run_name="matryoshka-nli",  # pip install wandb 训练可视化
 )
 
-# 6. Create the trainer & start training
+# Step 6. 创建 trainer，训练模型
 trainer = SentenceTransformerTrainer(
     model=model,
     args=args,
@@ -106,7 +108,7 @@ trainer = SentenceTransformerTrainer(
 )
 trainer.train()
 
-# 7. Evaluate the model performance on the STS Benchmark test dataset
+# Step 7. 模型性能评估
 test_dataset = load_dataset("sentence-transformers/stsb", split="test")
 evaluators = []
 for dim in matryoshka_dims:
@@ -123,12 +125,11 @@ for dim in matryoshka_dims:
 test_evaluator = SequentialEvaluator(evaluators)
 test_evaluator(model)
 
-# 8. Save the trained & evaluated model locally
+# Step 8. 保存模型
 final_output_dir = f"{output_dir}/final"
 model.save(final_output_dir)
 
-# 9. (Optional) save the model to the Hugging Face Hub!
-# It is recommended to run `huggingface-cli login` to log into your Hugging Face account first
+# Step 9. (可选) 将模型上传至 Hugging Face Hub，run `huggingface-cli login`
 model_name = model_name if "/" not in model_name else model_name.split("/")[-1]
 try:
     model.push_to_hub(f"{model_name}-nli-matryoshka")
