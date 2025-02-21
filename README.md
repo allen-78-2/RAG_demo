@@ -2,6 +2,9 @@
 
 ## Quick start
 ### Step 1. download model
+```shell
+python model_download.py
+```
 ### Step 2. load/generate datasets
 ### Step 3. train the pre-train model
 
